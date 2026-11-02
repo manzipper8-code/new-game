@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Rogue-like Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 255, 200, 0.2);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #1a1a24;
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+            text-shadow: 1px 1px 3px #000;
+        }
+        .bar-wrap {
+            width: 180px;
+            height: 14px;
+            background: #333;
+            border: 1px solid #666;
+            border-radius: 7px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        #hp-fill {
+            width: 100%;
+            height: 100%;
+            background: #ff4757;
+        }
+        #xp-fill {
+            width: 0%;
+            height: 100%;
+            background: #2ed573;
+        }
+        #game-over {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: #ff4757;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="ui">
+        <div>
+            HP
+            <div class="bar-wrap"><div id="hp-fill"></div></div>
+        </div>
+        <div style="text-align: center;">
+            <div id="level-text" style="font-size: 20px; color: #eccc68;">LV: 1</div>
+            <div id="score-text" style="font-size: 12px; color: #aaa;">Kills: 0</div>
+        </div>
+        <div>
+            XP
+            <div class="bar-wrap"><div id="xp-fill"></div></div>
+        </div>
+    </div>
+    <div id="game-over">
+        <div>GAME OVER</div>
+        <div style="font-size: 14px; color: #fff; margin-top: 10px;">F5キーで再挑戦</div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// --- キー入力管理 ---
+const keys = {};
+window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+// --- プレイヤー ---
+const player = {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+    radius: 12,
+    speed: 3,
+    hp: 100,
+    maxHp: 100,
+    level: 1,
+    xp: 0,
+    nextXp: 5,
+    attackCooldown: 0,
+    attackSpeed: 30, // フレーム数（小さいほど速い）
+    kills: 0
+};
+
+// --- 配列管理 ---
+let enemies = [];
+let bullets = [];
+let xps = [];
+let isGameOver = false;
+
+// --- 敵生成タイマー ---
+let enemySpawnTimer = 0;
+
+// --- メインゲームループ ---
+function loop() {
+    if (isGameOver) return;
+
+    update();
+    draw();
+
+    requestAnimationFrame(loop);
+}
+
+// --- 更新処理 ---
+function update() {
+    // 1. プレイヤー移動
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy -= 1;
+    if (keys['s'] || keys['arrowdown']) dy += 1;
+    if (keys['a'] || keys['arrowleft']) dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+
+    if (dx !== 0 && dy !== 0) {
+        dx *= 0.7071;
+        dy *= 0.7071;
+    }
+
+    player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x + dx * player.speed));
+    player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y + dy * player.speed));
+
+    // 2. 自動攻撃（一番近い敵を狙う）
+    player.attackCooldown--;
+    if (player.attackCooldown <= 0 && enemies.length > 0) {
+        let nearestEnemy = null;
+        let minDist = Infinity;
+
+        enemies.forEach(e => {
+            const dist = Math.hypot(e.x - player.x, e.y - player.y);
+            if (dist < minDist) {
+                minDist = dist;
+                nearestEnemy = e;
+            }
+        });
+
+        if (nearestEnemy) {
+            const angle = Math.atan2(nearestEnemy.y - player.y, nearestEnemy.x - player.x);
+            bullets.push({
+                x: player.x,
+                y: player.y,
+                vx: Math.cos(angle) * 7,
+                vy: Math.sin(angle) * 7,
+                radius: 4
+            });
+            player.attackCooldown = player.attackSpeed;
+        }
+    }
+
+    // 3. 弾の移動＆衝突判定
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.x += b.vx;
+        b.y += b.vy;
+
+        // 画面外で消去
+        if (b.x < 0 || b.x > canvas.width || b.y < 0 || b.y > canvas.height) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // 敵との判定
+        for (let j = enemies.length - 1; j >= 0; j--) {
+            const e = enemies[j];
+            if (Math.hypot(e.x - b.x, e.y - b.y) < e.radius + b.radius) {
+                e.hp -= 1;
+                bullets.splice(i, 1);
+
+                if (e.hp <= 0) {
+                    // 敵撃破 $\rightarrow$ XPドロップ
+                    xps.push({ x: e.x, y: e.y, radius: 5, value: 1 });
+                    enemies.splice(j, 1);
+                    player.kills++;
+                }
+                break;
+            }
+        }
+    }
+
+    // 4. 敵の生成（画面端から湧く）
+    enemySpawnTimer++;
+    if (enemySpawnTimer > 40) { // スポーン間隔
+        let sx, sy;
+        if (Math.random() < 0.5) {
+            sx = Math.random() < 0.5 ? 0 : canvas.width;
+            sy = Math.random() * canvas.height;
+        } else {
+            sx = Math.random() * canvas.width;
+            sy = Math.random() < 0.5 ? 0 : canvas.height;
+        }
+        enemies.push({ x: sx, y: sy, radius: 10, speed: 1.2, hp: 2 });
+        enemySpawnTimer = 0;
+    }
+
+    // 5. 敵の移動＆プレイヤーとの判定
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        const angle = Math.atan2(player.y - e.y, player.x - e.x);
+        e.x += Math.cos(angle) * e.speed;
+        e.y += Math.sin(angle) * e.speed;
+
+        // プレイヤーに接触
+        if (Math.hypot(player.x - e.x, player.y - e.y) < player.radius + e.radius) {
+            player.hp -= 0.5;
+            if (player.hp <= 0) {
+                player.hp = 0;
+                isGameOver = true;
+                document.getElementById('game-over').style.display = 'flex';
+            }
+        }
+    }
+
+    // 6. XPオーブの収集判定
+    for (let i = xps.length - 1; i >= 0; i--) {
+        const x = xps[i];
+        const dist = Math.hypot(player.x - x.x, player.y - x.y);
+
+        // 自機に引き寄せられる効果
+        if (dist < 80) {
+            const angle = Math.atan2(player.y - x.y, player.x - x.x);
+            x.x += Math.cos(angle) * 4;
+            x.y += Math.sin(angle) * 4;
+        }
+
+        if (dist < player.radius + x.radius) {
+            player.xp += x.value;
+            xps.splice(i, 1);
+
+            // レベルアップ処理
+            if (player.xp >= player.nextXp) {
+                player.level++;
+                player.xp -= player.nextXp;
+                player.nextXp = Math.floor(player.nextXp * 1.5);
+                player.hp = Math.min(player.maxHp, player.hp + 20); // HP回復
+                player.attackSpeed = Math.max(8, player.attackSpeed - 3); // 攻撃速度アップ
+            }
+        }
+    }
+
+    // UIの更新
+    document.getElementById('hp-fill').style.width = `${(player.hp / player.maxHp) * 100}%`;
+    document.getElementById('xp-fill').style.width = `${(player.xp / player.nextXp) * 100}%`;
+    document.getElementById('level-text').innerText = `LV: ${player.level}`;
+    document.getElementById('score-text').innerText = `Kills: ${player.kills}`;
+}
+
+// --- 描画処理 ---
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // XPオーブ（緑色）
+    ctx.fillStyle = '#2ed573';
+    xps.forEach(x => {
+        ctx.beginPath();
+        ctx.arc(x.x, x.y, x.radius, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 弾（黄色）
+    ctx.fillStyle = '#ffa502';
+    bullets.forEach(b => {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // 敵（赤色）
+    ctx.fillStyle = '#ff4757';
+    enemies.forEach(e => {
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // プレイヤー（青色）
+    ctx.fillStyle = '#1e90ff';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+// ゲームスタート
+loop();
+</script>
+
+</body>
+</html>
