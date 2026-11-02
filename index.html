@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>モンスター競売ブリーダー - Phase 2</title>
+    <style>
+        body {
+            background-color: #121216;
+            color: #eee;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { margin-bottom: 5px; font-size: 24px; color: #f1c40f; }
+        #wallet {
+            font-size: 20px;
+            font-weight: bold;
+            color: #2ecc71;
+            background: #1e1e24;
+            padding: 8px 20px;
+            border-radius: 20px;
+            border: 1px solid #2ecc71;
+            margin-bottom: 15px;
+        }
+        .lab-container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .card {
+            background: #1e1e24;
+            border: 2px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            width: 200px;
+            text-align: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            position: relative;
+        }
+        .card h3 { margin-top: 0; color: #3498db; }
+        canvas {
+            background: #0a0a0d;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .stat-bar {
+            background: #333;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 4px 0 10px 0;
+        }
+        .stat-fill { height: 100%; background: #2ecc71; width: 0%; }
+        button {
+            background: #e67e22;
+            color: #fff;
+            border: none;
+            padding: 10px 18px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover { background: #d35400; transform: scale(1.05); }
+        button:disabled { background: #555; cursor: not-allowed; transform: none; }
+        
+        /* オークションエリア */
+        .auction-panel {
+            background: #1a1a24;
+            border: 2px solid #f1c40f;
+            border-radius: 12px;
+            padding: 15px;
+            width: 100%;
+            max-width: 660px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .bid-price {
+            font-size: 28px;
+            font-weight: bold;
+            color: #f1c40f;
+        }
+
+        .log-box {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 10px;
+            width: 100%;
+            max-width: 660px;
+            height: 120px;
+            overflow-y: auto;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #aaa;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+<h1>🧬 モンスター配合＆競売場</h1>
+<div id="wallet">所持金: <span id="goldText">2,000</span> G</div>
+
+<div class="lab-container">
+    <!-- 親A -->
+    <div class="card">
+        <h3>親A (Gen-1)</h3>
+        <canvas id="canvasA" width="120" height="120"></canvas>
+        <div>スピード: <span id="speedA">0</span></div>
+        <div class="stat-bar"><div id="barA" class="stat-fill"></div></div>
+    </div>
+
+    <!-- 配合ボタン -->
+    <div style="display: flex; flex-direction: column; justify-content: center; align-items: center;">
+        <button id="breedBtn" onclick="breed()">配合実行！<br><span style="font-size: 11px;">(費用: 500G)</span></button>
+    </div>
+
+    <!-- 親B -->
+    <div class="card">
+        <h3>親B (Gen-1)</h3>
+        <canvas id="canvasB" width="120" height="120"></canvas>
+        <div>スピード: <span id="speedB">0</span></div>
+        <div class="stat-bar"><div id="barB" class="stat-fill"></div></div>
+    </div>
+</div>
+
+<!-- 誕生した子供 -->
+<div class="card" style="width: 280px; border-color: #f1c40f; margin-bottom: 15px;">
+    <h3 style="color: #f1c40f;">誕生した子供 (Gen-<span id="childGen">-</span>)</h3>
+    <canvas id="canvasChild" width="120" height="120"></canvas>
+    <div>タイプ: <strong id="childType">-</strong></div>
+    <div>スピード: <strong id="childSpeed">-</strong></div>
+    <div class="stat-bar"><div id="barChild" class="stat-fill" style="background:#f1c40f;"></div></div>
+    <div>想定価値: <strong id="childValue" style="color:#2ecc71;">- G</strong></div>
+    <button id="sellBtn" onclick="startAuction()" style="margin-top: 10px; width: 100%; background: #9b59b6;" disabled>競売に出品する！</button>
+</div>
+
+<!-- オークションリアルタイム実況 -->
+<div class="auction-panel">
+    <div>
+        <div style="font-size: 12px; color: #aaa;">現在の最高入札額</div>
+        <div class="bid-price" id="currentBid">0 G</div>
+    </div>
+    <div id="auctionStatus" style="font-size: 14px; color: #e74c3c; font-weight: bold;">出品待ち</div>
+</div>
+
+<div class="log-box" id="log">--- システムログ ---<br></div>
+
+<script>
+class Monster {
+    constructor(gen, hue, speed, isMutant = false, colorType = 'normal') {
+        this.gen = gen;
+        this.hue = hue;
+        this.speed = speed;
+        this.isMutant = isMutant;
+        this.colorType = colorType;
+    }
+}
+
+let gold = 2000;
+let parentA = new Monster(1, 200, 30);
+let parentB = new Monster(1, 10, 35);
+let currentChild = null;
+let isAuctioning = false;
+
+// NPCブリーダーの名前リスト
+const npcNames = ["コレクターA", "富豪B", "研究員C", "ブリーダーD", "謎の商人X"];
+
+function init() {
+    drawMonster('canvasA', parentA);
+    drawMonster('canvasB', parentB);
+    updateCardUI('A', parentA);
+    updateCardUI('B', parentB);
+    updateWallet();
+}
+
+function updateWallet() {
+    document.getElementById('goldText').innerText = gold.toLocaleString();
+}
+
+// 配合処理
+function breed() {
+    if (gold < 500) {
+        addLog("❌ 所持金が足りません！（費用: 500G）");
+        return;
+    }
+
+    gold -= 500;
+    updateWallet();
+
+    const nextGen = Math.max(parentA.gen, parentB.gen) + 1;
+    let childSpeed = Math.floor((parentA.speed + parentB.speed) / 2) + Math.floor(Math.random() * 8 - 2);
+    let childHue = (Math.floor((parentA.hue + parentB.hue) / 2) + Math.floor(Math.random() * 40 - 20) + 360) % 360;
+
+    let isMutant = false;
+    let colorType = 'normal';
+    let logMsg = `Gen-${nextGen} の子供が誕生！`;
+
+    // 突然変異（8%）
+    if (Math.random() < 0.08) {
+        isMutant = true;
+        childSpeed += 25;
+        if (Math.random() < 0.2) {
+            colorType = 'hologram';
+            logMsg = `🔥 奇跡発生！7色に光るホログラム変異個体が誕生！！`;
+        } else {
+            colorType = 'rare';
+            logMsg = `✨ 突然変異！スピードが大幅覚醒しました！`;
+        }
+    }
+
+    currentChild = new Monster(nextGen, childHue, childSpeed, isMutant, colorType);
+
+    // 想定価格の計算
+    let baseValue = currentChild.speed * 80 * currentChild.gen;
+    if (colorType === 'rare') baseValue *= 3;
+    if (colorType === 'hologram') baseValue *= 8;
+    currentChild.estimatedValue = Math.floor(baseValue);
+
+    // UI更新
+    drawMonster('canvasChild', currentChild);
+    document.getElementById('childGen').innerText = currentChild.gen;
+    document.getElementById('childSpeed').innerText = currentChild.speed;
+    document.getElementById('barChild').style.width = Math.min(100, currentChild.speed) + '%';
+    document.getElementById('childType').innerText = colorType === 'hologram' ? '🌈 ホログラム' : (isMutant ? '⚡ 変異種' : 'ノーマル');
+    document.getElementById('childValue').innerText = currentChild.estimatedValue.toLocaleString() + ' G';
+
+    document.getElementById('sellBtn').disabled = false;
+    addLog(logMsg);
+}
+
+// オークション（競売）処理
+function startAuction() {
+    if (!currentChild || isAuctioning) return;
+
+    isAuctioning = true;
+    document.getElementById('sellBtn').disabled = true;
+    document.getElementById('breedBtn').disabled = true;
+    document.getElementById('auctionStatus').innerText = "🔨 競売中...";
+    document.getElementById('auctionStatus').style.color = "#f1c40f";
+
+    let currentBid = Math.floor(currentChild.estimatedValue * 0.5); // スタート価格は半額から
+    let bidsCount = 0;
+    const maxBids = 4 + Math.floor(Math.random() * 4); // 4〜7回入札
+
+    addLog(`📢 オークション開始！開始価格: ${currentBid.toLocaleString()} G`);
+    document.getElementById('currentBid').innerText = currentBid.toLocaleString() + " G";
+
+    // 1秒ごとにNPCが競り上げるタイマー処理
+    const timer = setInterval(() => {
+        bidsCount++;
+
+        // 競り上げ額（ランダム）
+        const raise = Math.floor((currentChild.estimatedValue * 0.2) * (1 + Math.random()));
+        currentBid += raise;
+
+        const npc = npcNames[Math.floor(Math.random() * npcNames.length)];
+        addLog(`💰 ${npc} が ${currentBid.toLocaleString()} G を入札！`);
+        document.getElementById('currentBid').innerText = currentBid.toLocaleString() + " G";
+
+        if (bidsCount >= maxBids) {
+            clearInterval(timer);
+            // 落札完了
+            gold += currentBid;
+            updateWallet();
+
+            addLog(`🎉 【落札】 ${currentBid.toLocaleString()} G で売却されました！`);
+            document.getElementById('auctionStatus').innerText = "✅ 落札完了！";
+            document.getElementById('auctionStatus').style.color = "#2ecc71";
+
+            isAuctioning = false;
+            document.getElementById('breedBtn').disabled = false;
+        }
+    }, 1000);
+}
+
+// 描画処理
+function drawMonster(canvasId, monster) {
+    const cvs = document.getElementById(canvasId);
+    const ctx = cvs.getContext('2d');
+    ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+    const cx = cvs.width / 2;
+    const cy = cvs.height / 2;
+
+    if (monster.colorType === 'hologram') {
+        const grad = ctx.createLinearGradient(0, 0, cvs.width, cvs.height);
+        grad.addColorStop(0, 'red');
+        grad.addColorStop(0.2, 'yellow');
+        grad.addColorStop(0.4, 'green');
+        grad.addColorStop(0.6, 'cyan');
+        grad.addColorStop(0.8, 'blue');
+        grad.addColorStop(1, 'magenta');
+        ctx.fillStyle = grad;
+    } else {
+        ctx.fillStyle = `hsl(${monster.hue}, 80%, 50%)`;
+    }
+
+    ctx.beginPath();
+    ctx.arc(cx, cy + 5, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = monster.isMutant ? 4 : 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx - 10, cy - 5, 7, 0, Math.PI * 2);
+    ctx.arc(cx + 10, cy - 5, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(cx - 8, cy - 5, 3, 0, Math.PI * 2);
+    ctx.arc(cx + 8, cy - 5, 3, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function updateCardUI(type, monster) {
+    document.getElementById(`speed${type}`).innerText = monster.speed;
+    document.getElementById(`bar${type}`).style.width = Math.min(100, monster.speed) + '%';
+}
+
+function addLog(msg) {
+    const log = document.getElementById('log');
+    log.innerHTML = `> ${msg}<br>` + log.innerHTML;
+}
+
+init();
+</script>
+</body>
+</html>
